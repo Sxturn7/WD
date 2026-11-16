@@ -6,7 +6,6 @@ import {
   LayoutDashboard,
   CreditCard,
   FileText,
-  CheckSquare,
   CalendarPlus,
   Receipt,
   Settings,

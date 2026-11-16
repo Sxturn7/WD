@@ -5,7 +5,8 @@ import { isIIMEmail } from '@/lib/utils'
 export async function GET(request: Request) {
   const { searchParams, origin } = new URL(request.url)
   const code = searchParams.get('code')
-  const next = searchParams.get('next') ?? '/'
+  const requestedNext = searchParams.get('next')
+  const next = requestedNext?.startsWith('/') && !requestedNext.startsWith('//') ? requestedNext : null
 
   if (code) {
     const supabase = await createClient()
@@ -29,7 +30,7 @@ export async function GET(request: Request) {
         await supabase.from('users').upsert(
           {
             id: user.id,
-            email,
+            email: email.toLowerCase(),
             full_name: user.user_metadata?.full_name ?? null,
             role: 'student',
           },
@@ -44,7 +45,7 @@ export async function GET(request: Request) {
           .single()
 
         const role = profile?.role ?? 'student'
-        return NextResponse.redirect(`${origin}/${role}`)
+        return NextResponse.redirect(new URL(next ?? `/${role}`, origin))
       }
     }
   }

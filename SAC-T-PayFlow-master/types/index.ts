@@ -50,7 +50,7 @@ export interface Claim {
   event_id: string
   prize_position: string
   prize_amount: number
-  bank_details_snapshot: BankDetails
+  bank_details_snapshot: BankDetails | null
   status: ClaimStatus
   created_at: string
   updated_at: string

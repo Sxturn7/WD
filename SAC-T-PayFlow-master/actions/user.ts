@@ -11,11 +11,27 @@ export async function updateBankDetails(bankDetails: BankDetails) {
     data: { user },
   } = await supabase.auth.getUser()
   if (!user) return { error: 'Not authenticated' }
+  if (!bankDetails || typeof bankDetails !== 'object') return { error: 'Invalid bank details.' }
+
+  const accountHolder = bankDetails.account_holder?.trim()
+  const accountNumber = bankDetails.account_number?.replace(/\s/g, '')
+  const ifscCode = bankDetails.ifsc_code?.trim().toUpperCase()
+  if (!accountHolder || accountHolder.length > 100 || !/^[0-9]{6,20}$/.test(accountNumber ?? '') || !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(ifscCode ?? '')) {
+    return { error: 'Enter a valid account holder, account number, and IFSC code.' }
+  }
+  const normalizedDetails = {
+    ...bankDetails,
+    account_holder: accountHolder,
+    account_number: accountNumber,
+    ifsc_code: ifscCode,
+    bank_name: bankDetails.bank_name?.trim().slice(0, 100) ?? '',
+    branch: bankDetails.branch?.trim().slice(0, 100) ?? '',
+    upi_id: bankDetails.upi_id?.trim().slice(0, 100) ?? null,
+  }
 
   const { error } = await supabase
-    .from('users')
-    .update({ bank_details: encryptJSON(bankDetails) })
-    .eq('id', user.id)
+    .from('user_bank_details')
+    .upsert({ user_id: user.id, bank_details: encryptJSON(normalizedDetails) }, { onConflict: 'user_id' })
 
   if (error) return { error: error.message }
 

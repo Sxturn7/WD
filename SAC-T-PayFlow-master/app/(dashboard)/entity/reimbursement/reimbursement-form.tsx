@@ -58,8 +58,9 @@ export function ReimbursementForm() {
       <form onSubmit={handleSubmit}>
         <CardContent className="space-y-4">
           <div className="space-y-1.5">
-            <Label>Event Name</Label>
+            <Label htmlFor="reimbursement-event-name">Event Name</Label>
             <Input
+              id="reimbursement-event-name"
               value={eventName}
               onChange={(e) => setEventName(e.target.value)}
               placeholder="Event this expense is for"
@@ -67,10 +68,11 @@ export function ReimbursementForm() {
             />
           </div>
           <div className="space-y-1.5">
-            <Label>Amount (₹)</Label>
+            <Label htmlFor="reimbursement-amount">Amount (₹)</Label>
             <div className="relative">
               <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 text-sm">₹</span>
               <Input
+                id="reimbursement-amount"
                 value={amount}
                 onChange={(e) => setAmount(e.target.value)}
                 placeholder="0"

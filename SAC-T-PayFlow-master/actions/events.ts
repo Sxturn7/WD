@@ -2,8 +2,6 @@
 
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
-import { encryptJSON, decryptJSON } from '@/lib/crypto'
-import type { BankDetails } from '@/types'
 import { generateEventCode } from '@/lib/utils'
 import type { PrizeTier } from '@/types'
 
@@ -72,21 +70,19 @@ export async function announceWinners(
 ) {
   const supabase = await createClient()
 
-  // Resolve student_id and bank_details for each winner by email
   const rows = await Promise.all(
-    winners.map(async (w) => {
+    winners.map(async (winner) => {
       const { data } = await supabase
         .from('users')
-        .select('id, bank_details')
-        .eq('email', w.student_email)
-        .single()
+        .select('id')
+        .eq('email', winner.student_email.trim().toLowerCase())
+        .maybeSingle()
       return {
         event_id: eventId,
         student_id: data?.id ?? null,
-        student_email: w.student_email,
-        prize_position: w.prize_position,
-        prize_amount: w.prize_amount,
-        _bank_details: data?.bank_details ?? null,
+        student_email: winner.student_email.trim().toLowerCase(),
+        prize_position: winner.prize_position,
+        prize_amount: winner.prize_amount,
       }
     })
   )
@@ -94,13 +90,18 @@ export async function announceWinners(
   const { error } = await supabase
     .from('event_winners')
     .upsert(
-      rows.map(({ _bank_details, ...r }) => r),
+      rows.map((row) => ({
+        event_id: row.event_id,
+        student_id: row.student_id,
+        student_email: row.student_email,
+        prize_position: row.prize_position,
+        prize_amount: row.prize_amount,
+      })),
       { onConflict: 'event_id,student_email' }
     )
 
   if (error) return { error: error.message }
 
-  // Auto-create claims for each winner using their saved bank details
   for (const row of rows) {
     if (!row.student_id) continue
 
@@ -114,16 +115,12 @@ export async function announceWinners(
 
     if (existing) continue
 
-    const bankDetails = row._bank_details
-      ? decryptJSON<BankDetails>(row._bank_details)
-      : null
-
     await supabase.from('claims').insert({
       student_id: row.student_id,
       event_id: eventId,
       prize_position: row.prize_position,
       prize_amount: row.prize_amount,
-      bank_details_snapshot: bankDetails ? encryptJSON(bankDetails) : null,
+      bank_details_snapshot: null,
       status: 'winners_announced',
     })
   }

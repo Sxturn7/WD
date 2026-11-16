@@ -2,7 +2,7 @@
 
 import Image from 'next/image'
 import Script from 'next/script'
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { Loader2, Mail, Lock, Eye, EyeOff, ArrowRight } from 'lucide-react'
@@ -16,21 +16,14 @@ interface LoginFormProps {
   error?: string
 }
 
-type TurnstileApi = {
-  render: (container: HTMLElement, options: {
-    sitekey: string
-    theme?: 'light' | 'dark' | 'auto'
-    callback: (token: string) => void
-    'expired-callback'?: () => void
-    'error-callback'?: () => void
-  }) => string
-  reset: (widgetId?: string) => void
-  remove: (widgetId: string) => void
+type RecaptchaApi = {
+  ready: (callback: () => void) => void
+  execute: (siteKey: string, options: { action: 'login' | 'signup' }) => Promise<string>
 }
 
 declare global {
   interface Window {
-    turnstile?: TurnstileApi
+    grecaptcha?: RecaptchaApi
   }
 }
 
@@ -44,50 +37,34 @@ export function LoginForm({ error: initialError }: LoginFormProps = {}) {
   const [email, setEmail] = useState('')
   const [fullName, setFullName] = useState('')
   const [password, setPassword] = useState('')
-  const [captchaToken, setCaptchaToken] = useState('')
-  const [turnstileReady, setTurnstileReady] = useState(false)
-  const captchaRef = useRef<HTMLDivElement>(null)
-  const widgetIdRef = useRef<string | null>(null)
-  const siteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY
+  const [recaptchaReady, setRecaptchaReady] = useState(false)
+  const siteKey = process.env.NEXT_PUBLIC_RECAPTCHA_SITE_KEY
 
-  useEffect(() => {
-    if (!turnstileReady || !siteKey || !captchaRef.current || !window.turnstile) return
-    widgetIdRef.current = window.turnstile.render(captchaRef.current, {
-      sitekey: siteKey,
-      theme: 'dark',
-      callback: setCaptchaToken,
-      'expired-callback': () => setCaptchaToken(''),
-      'error-callback': () => setCaptchaToken(''),
-    })
-    return () => {
-      if (widgetIdRef.current) window.turnstile?.remove(widgetIdRef.current)
-      widgetIdRef.current = null
-    }
-  }, [turnstileReady, siteKey, tab])
-
-  async function verifyCaptcha() {
-    if (!captchaToken) {
-      toast.error('Complete the CAPTCHA challenge to continue.')
+  async function verifyCaptcha(action: 'login' | 'signup') {
+    const recaptcha = window.grecaptcha
+    if (!siteKey || !recaptcha?.ready || !recaptcha.execute) {
+      toast.error('CAPTCHA is not ready. Please try again.')
       return false
     }
 
     try {
+      const token = await new Promise<string>((resolve, reject) => {
+        recaptcha.ready(() => {
+          recaptcha.execute(siteKey, { action }).then(resolve, reject)
+        })
+      })
       const verification = await fetch('/api/auth/verify-captcha', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token: captchaToken }),
+        body: JSON.stringify({ token, action }),
       })
       const result = await verification.json()
-      setCaptchaToken('')
       if (!verification.ok) {
-        if (widgetIdRef.current) window.turnstile?.reset(widgetIdRef.current)
         toast.error(result.error ?? 'CAPTCHA verification failed.')
         return false
       }
       return true
     } catch {
-      if (widgetIdRef.current) window.turnstile?.reset(widgetIdRef.current)
-      setCaptchaToken('')
       toast.error('CAPTCHA verification is temporarily unavailable.')
       return false
     }
@@ -102,17 +79,15 @@ export function LoginForm({ error: initialError }: LoginFormProps = {}) {
 
     setLoading(true)
     try {
-      if (!(await verifyCaptcha())) return
+      if (!(await verifyCaptcha('login'))) return
       const { error } = await supabase.auth.signInWithPassword({ email: email.trim().toLowerCase(), password })
       if (error) {
-        if (widgetIdRef.current) window.turnstile?.reset(widgetIdRef.current)
         toast.error(error.code === 'invalid_credentials' ? 'Invalid email or password.' : 'Unable to sign in right now. Please try again.')
         return
       }
       router.push('/')
       router.refresh()
     } catch {
-      if (widgetIdRef.current) window.turnstile?.reset(widgetIdRef.current)
       toast.error('Unable to sign in right now. Please try again.')
     } finally {
       setLoading(false)
@@ -137,7 +112,7 @@ export function LoginForm({ error: initialError }: LoginFormProps = {}) {
 
     setLoading(true)
     try {
-      if (!(await verifyCaptcha())) return
+      if (!(await verifyCaptcha('signup'))) return
       const { data, error } = await supabase.auth.signUp({
         email: normalizedEmail,
         password,
@@ -166,11 +141,13 @@ export function LoginForm({ error: initialError }: LoginFormProps = {}) {
 
   return (
     <div className="min-h-screen flex bg-[#0d0d0f]">
-      <Script
-        src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"
-        strategy="afterInteractive"
-        onReady={() => setTurnstileReady(true)}
-      />
+      {siteKey && (
+        <Script
+          src={`https://www.google.com/recaptcha/api.js?render=${encodeURIComponent(siteKey)}`}
+          strategy="afterInteractive"
+          onReady={() => setRecaptchaReady(true)}
+        />
+      )}
 
       {/* Left panel - branding */}
       <div className="hidden lg:flex lg:w-[52%] flex-col justify-between p-12 bg-zinc-950 border-r border-zinc-800/60 relative overflow-hidden">
@@ -266,7 +243,7 @@ export function LoginForm({ error: initialError }: LoginFormProps = {}) {
               <button
                 key={t}
                 type="button"
-                onClick={() => { setCaptchaToken(''); setTab(t) }}
+                onClick={() => setTab(t)}
                 className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${
                   tab === t
                     ? 'bg-zinc-800 text-zinc-100 shadow-sm'
@@ -329,10 +306,15 @@ export function LoginForm({ error: initialError }: LoginFormProps = {}) {
 
               <div className="flex flex-col items-center gap-2">
                 {siteKey ? (
-                  <div ref={captchaRef} aria-label="CAPTCHA verification" />
+                  <p className="text-xs text-zinc-500 text-center">
+                    Protected by reCAPTCHA.{' '}
+                    <a className="underline hover:text-zinc-300" href="https://policies.google.com/privacy" target="_blank" rel="noreferrer">Privacy</a>
+                    {' · '}
+                    <a className="underline hover:text-zinc-300" href="https://policies.google.com/terms" target="_blank" rel="noreferrer">Terms</a>
+                  </p>
                 ) : (
                   <p role="alert" className="text-sm text-red-400 text-center">
-                    CAPTCHA is not configured. Ask an administrator to set the Turnstile site and secret keys.
+                    CAPTCHA is not configured. Ask an administrator to set the reCAPTCHA site and secret keys.
                   </p>
                 )}
               </div>
@@ -340,7 +322,7 @@ export function LoginForm({ error: initialError }: LoginFormProps = {}) {
               <Button
                 type="submit"
                 className="w-full h-11 text-base font-medium mt-2"
-                disabled={loading || !siteKey || !captchaToken}
+disabled={loading || !siteKey || !recaptchaReady}
               >
                 {loading
                   ? <Loader2 className="h-4 w-4 animate-spin" />
@@ -371,9 +353,18 @@ export function LoginForm({ error: initialError }: LoginFormProps = {}) {
                 <p className="text-xs text-zinc-500">At least 8 characters.</p>
               </div>
               <div className="flex justify-center">
-                {siteKey ? <div ref={captchaRef} aria-label="CAPTCHA verification" /> : <p role="alert" className="text-sm text-red-400 text-center">CAPTCHA is not configured.</p>}
+                {siteKey ? (
+                  <p className="text-xs text-zinc-500 text-center">
+                    Protected by reCAPTCHA.{' '}
+                    <a className="underline hover:text-zinc-300" href="https://policies.google.com/privacy" target="_blank" rel="noreferrer">Privacy</a>
+                    {' · '}
+                    <a className="underline hover:text-zinc-300" href="https://policies.google.com/terms" target="_blank" rel="noreferrer">Terms</a>
+                  </p>
+                ) : (
+                  <p role="alert" className="text-sm text-red-400 text-center">CAPTCHA is not configured.</p>
+                )}
               </div>
-              <Button type="submit" className="w-full h-11" disabled={loading || !siteKey || !captchaToken}>
+              <Button type="submit" className="w-full h-11" disabled={loading || !siteKey || !recaptchaReady}>
                 {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <>Create account <ArrowRight className="h-4 w-4 ml-1" /></>}
               </Button>
               <p className="text-xs text-zinc-500 text-center">New accounts are assigned the student role. Entity and treasury access is managed by administrators.</p>

@@ -17,6 +17,7 @@ interface LoginFormProps {
 }
 
 type RecaptchaApi = {
+  ready: (callback: () => void) => void
   render: (container: HTMLElement, options: {
     sitekey: string
     theme?: 'light' | 'dark'
@@ -50,16 +51,24 @@ export function LoginForm({ error: initialError }: LoginFormProps = {}) {
   const siteKey = process.env.NEXT_PUBLIC_RECAPTCHA_SITE_KEY
 
   useEffect(() => {
-    if (!recaptchaReady || !siteKey || !captchaRef.current || !window.grecaptcha) return
-    widgetIdRef.current = window.grecaptcha.render(captchaRef.current, {
-      sitekey: siteKey,
-      theme: 'dark',
-      callback: setCaptchaToken,
-      'expired-callback': () => setCaptchaToken(''),
-      'error-callback': () => setCaptchaToken(''),
+    const recaptcha = window.grecaptcha
+    if (!recaptchaReady || !siteKey || !captchaRef.current || !recaptcha?.ready) return
+
+    let disposed = false
+    recaptcha.ready(() => {
+      if (disposed || !captchaRef.current) return
+      widgetIdRef.current = recaptcha.render(captchaRef.current, {
+        sitekey: siteKey,
+        theme: 'dark',
+        callback: setCaptchaToken,
+        'expired-callback': () => setCaptchaToken(''),
+        'error-callback': () => setCaptchaToken(''),
+      })
     })
+
     return () => {
-      if (widgetIdRef.current !== null) window.grecaptcha?.reset(widgetIdRef.current)
+      disposed = true
+      if (widgetIdRef.current !== null) recaptcha.reset(widgetIdRef.current)
       widgetIdRef.current = null
     }
   }, [recaptchaReady, siteKey, tab])

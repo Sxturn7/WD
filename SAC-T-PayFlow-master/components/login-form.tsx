@@ -1,7 +1,8 @@
 'use client'
 
 import Image from 'next/image'
-import { useState } from 'react'
+import Script from 'next/script'
+import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { Loader2, Mail, Lock, Eye, EyeOff, ArrowRight } from 'lucide-react'
@@ -15,6 +16,24 @@ interface LoginFormProps {
   error?: string
 }
 
+type TurnstileApi = {
+  render: (container: HTMLElement, options: {
+    sitekey: string
+    theme?: 'light' | 'dark' | 'auto'
+    callback: (token: string) => void
+    'expired-callback'?: () => void
+    'error-callback'?: () => void
+  }) => string
+  reset: (widgetId?: string) => void
+  remove: (widgetId: string) => void
+}
+
+declare global {
+  interface Window {
+    turnstile?: TurnstileApi
+  }
+}
+
 export function LoginForm({ error: initialError }: LoginFormProps = {}) {
   const router = useRouter()
   const supabase = createClient()
@@ -23,7 +42,56 @@ export function LoginForm({ error: initialError }: LoginFormProps = {}) {
   const [loading, setLoading] = useState(false)
   const [showPw, setShowPw] = useState(false)
   const [email, setEmail] = useState('')
+  const [fullName, setFullName] = useState('')
   const [password, setPassword] = useState('')
+  const [captchaToken, setCaptchaToken] = useState('')
+  const [turnstileReady, setTurnstileReady] = useState(false)
+  const captchaRef = useRef<HTMLDivElement>(null)
+  const widgetIdRef = useRef<string | null>(null)
+  const siteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY
+
+  useEffect(() => {
+    if (!turnstileReady || !siteKey || !captchaRef.current || !window.turnstile) return
+    widgetIdRef.current = window.turnstile.render(captchaRef.current, {
+      sitekey: siteKey,
+      theme: 'dark',
+      callback: setCaptchaToken,
+      'expired-callback': () => setCaptchaToken(''),
+      'error-callback': () => setCaptchaToken(''),
+    })
+    return () => {
+      if (widgetIdRef.current) window.turnstile?.remove(widgetIdRef.current)
+      widgetIdRef.current = null
+    }
+  }, [turnstileReady, siteKey, tab])
+
+  async function verifyCaptcha() {
+    if (!captchaToken) {
+      toast.error('Complete the CAPTCHA challenge to continue.')
+      return false
+    }
+
+    try {
+      const verification = await fetch('/api/auth/verify-captcha', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: captchaToken }),
+      })
+      const result = await verification.json()
+      setCaptchaToken('')
+      if (!verification.ok) {
+        if (widgetIdRef.current) window.turnstile?.reset(widgetIdRef.current)
+        toast.error(result.error ?? 'CAPTCHA verification failed.')
+        return false
+      }
+      return true
+    } catch {
+      if (widgetIdRef.current) window.turnstile?.reset(widgetIdRef.current)
+      setCaptchaToken('')
+      toast.error('CAPTCHA verification is temporarily unavailable.')
+      return false
+    }
+  }
 
   async function handleSignIn(e: React.FormEvent) {
     e.preventDefault()
@@ -31,16 +99,78 @@ export function LoginForm({ error: initialError }: LoginFormProps = {}) {
       toast.error('Only @iimidr.ac.in emails are allowed.')
       return
     }
+
     setLoading(true)
-    const { error } = await supabase.auth.signInWithPassword({ email, password })
-    setLoading(false)
-    if (error) { toast.error(error.message); return }
-    router.push('/')
-    router.refresh()
+    try {
+      if (!(await verifyCaptcha())) return
+      const { error } = await supabase.auth.signInWithPassword({ email: email.trim().toLowerCase(), password })
+      if (error) {
+        if (widgetIdRef.current) window.turnstile?.reset(widgetIdRef.current)
+        toast.error(error.code === 'invalid_credentials' ? 'Invalid email or password.' : 'Unable to sign in right now. Please try again.')
+        return
+      }
+      router.push('/')
+      router.refresh()
+    } catch {
+      if (widgetIdRef.current) window.turnstile?.reset(widgetIdRef.current)
+      toast.error('Unable to sign in right now. Please try again.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function handleSignUp(e: React.FormEvent) {
+    e.preventDefault()
+    const normalizedEmail = email.trim().toLowerCase()
+    if (!isIIMEmail(normalizedEmail)) {
+      toast.error('Only @iimidr.ac.in emails are allowed.')
+      return
+    }
+    if (fullName.trim().length < 2 || fullName.trim().length > 100) {
+      toast.error('Enter your full name (2–100 characters).')
+      return
+    }
+    if (password.length < 8) {
+      toast.error('Use a password with at least 8 characters.')
+      return
+    }
+
+    setLoading(true)
+    try {
+      if (!(await verifyCaptcha())) return
+      const { data, error } = await supabase.auth.signUp({
+        email: normalizedEmail,
+        password,
+        options: {
+          data: { full_name: fullName.trim() },
+          emailRedirectTo: `${window.location.origin}/auth/callback`,
+        },
+      })
+      if (error) {
+        toast.error('Unable to create this account. Check your details or try signing in.')
+        return
+      }
+      if (data.session) {
+        router.push('/')
+        router.refresh()
+      } else {
+        toast.success('Account request received. Check your email to confirm your address.')
+        setTab('signin')
+      }
+    } catch {
+      toast.error('Unable to create this account right now. Please try again.')
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
     <div className="min-h-screen flex bg-[#0d0d0f]">
+      <Script
+        src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"
+        strategy="afterInteractive"
+        onReady={() => setTurnstileReady(true)}
+      />
 
       {/* Left panel - branding */}
       <div className="hidden lg:flex lg:w-[52%] flex-col justify-between p-12 bg-zinc-950 border-r border-zinc-800/60 relative overflow-hidden">
@@ -114,12 +244,12 @@ export function LoginForm({ error: initialError }: LoginFormProps = {}) {
           {/* Heading */}
           <div className="mb-8">
             <h2 className="text-2xl font-bold text-zinc-100">
-              {tab === 'signin' ? 'Welcome back' : 'Coming soon'}
+              {tab === 'signin' ? 'Welcome back' : 'Create your account'}
             </h2>
             <p className="text-zinc-500 mt-1.5">
               {tab === 'signin'
                 ? 'Sign in to your treasury account'
-                : 'Self-registration is not yet available'}
+                : 'Use your IIM Indore email to register as a student'}
             </p>
           </div>
 
@@ -136,7 +266,7 @@ export function LoginForm({ error: initialError }: LoginFormProps = {}) {
               <button
                 key={t}
                 type="button"
-                onClick={() => setTab(t)}
+                onClick={() => { setCaptchaToken(''); setTab(t) }}
                 className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${
                   tab === t
                     ? 'bg-zinc-800 text-zinc-100 shadow-sm'
@@ -197,10 +327,20 @@ export function LoginForm({ error: initialError }: LoginFormProps = {}) {
                 </div>
               </div>
 
+              <div className="flex flex-col items-center gap-2">
+                {siteKey ? (
+                  <div ref={captchaRef} aria-label="CAPTCHA verification" />
+                ) : (
+                  <p role="alert" className="text-sm text-red-400 text-center">
+                    CAPTCHA is not configured. Ask an administrator to set the Turnstile site and secret keys.
+                  </p>
+                )}
+              </div>
+
               <Button
                 type="submit"
                 className="w-full h-11 text-base font-medium mt-2"
-                disabled={loading}
+                disabled={loading || !siteKey || !captchaToken}
               >
                 {loading
                   ? <Loader2 className="h-4 w-4 animate-spin" />
@@ -215,27 +355,29 @@ export function LoginForm({ error: initialError }: LoginFormProps = {}) {
             </form>
           )}
 
-          {/* Sign Up - Coming Soon */}
           {tab === 'signup' && (
-            <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-8 text-center space-y-4">
-              <div className="w-14 h-14 rounded-2xl bg-zinc-800 flex items-center justify-center mx-auto">
-                <span className="text-2xl">🔒</span>
+            <form onSubmit={handleSignUp} className="space-y-5">
+              <div className="space-y-2">
+                <Label htmlFor="signup-name" className="text-sm font-medium text-zinc-300">Full name</Label>
+                <Input id="signup-name" value={fullName} onChange={(event) => setFullName(event.target.value)} autoComplete="name" maxLength={100} required />
               </div>
-              <div>
-                <p className="text-base font-semibold text-zinc-200">Sign Up Coming Soon</p>
-                <p className="text-sm text-zinc-500 mt-2 leading-relaxed">
-                  Self-registration is under development.<br />
-                  Elect the ideal JT to speed up the work.
-                </p>
+              <div className="space-y-2">
+                <Label htmlFor="signup-email" className="text-sm font-medium text-zinc-300">IIM Indore email</Label>
+                <Input id="signup-email" type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" placeholder="you@iimidr.ac.in" required />
               </div>
-              <button
-                type="button"
-                onClick={() => setTab('signin')}
-                className="inline-flex items-center gap-1.5 text-sm font-medium text-emerald-400 hover:text-emerald-300 transition-colors"
-              >
-                Back to Sign In <ArrowRight className="h-3.5 w-3.5" />
-              </button>
-            </div>
+              <div className="space-y-2">
+                <Label htmlFor="signup-password" className="text-sm font-medium text-zinc-300">Password</Label>
+                <Input id="signup-password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="new-password" minLength={8} required />
+                <p className="text-xs text-zinc-500">At least 8 characters.</p>
+              </div>
+              <div className="flex justify-center">
+                {siteKey ? <div ref={captchaRef} aria-label="CAPTCHA verification" /> : <p role="alert" className="text-sm text-red-400 text-center">CAPTCHA is not configured.</p>}
+              </div>
+              <Button type="submit" className="w-full h-11" disabled={loading || !siteKey || !captchaToken}>
+                {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <>Create account <ArrowRight className="h-4 w-4 ml-1" /></>}
+              </Button>
+              <p className="text-xs text-zinc-500 text-center">New accounts are assigned the student role. Entity and treasury access is managed by administrators.</p>
+            </form>
           )}
         </div>
       </div>

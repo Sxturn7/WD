@@ -37,19 +37,26 @@ export function StudentSearch({ onSelect, placeholder, defaultEmail }: Props) {
   }, [])
 
   useEffect(() => {
-    if (locked || query.length < 2) {
-      setResults([])
-      setOpen(false)
-      return
-    }
+    if (locked || query.trim().length < 2) return
+
+    let active = true
     const timer = setTimeout(async () => {
       setLoading(true)
-      const data = await searchStudents(query)
-      setResults(data)
-      setOpen(data.length > 0)
-      setLoading(false)
+      try {
+        const data = await searchStudents(query.trim())
+        if (active) {
+          setResults(data)
+          setOpen(data.length > 0)
+        }
+      } finally {
+        if (active) setLoading(false)
+      }
     }, 300)
-    return () => clearTimeout(timer)
+
+    return () => {
+      active = false
+      clearTimeout(timer)
+    }
   }, [query, locked])
 
   function handleSelect(student: Student) {

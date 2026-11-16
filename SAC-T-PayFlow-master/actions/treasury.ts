@@ -24,13 +24,18 @@ export async function getAllClaims(filter?: 'pending' | 'processing' | 'complete
   }
 
   const { data } = await query
+  const claims = data ?? []
+  const studentIds = [...new Set(claims.map((claim) => claim.student_id))]
+  const { data: bankRecords } = studentIds.length
+    ? await supabase.from('user_bank_details').select('user_id, bank_details').in('user_id', studentIds)
+    : { data: [] }
+  const bankDetailsByUser = new Map((bankRecords ?? []).map((record) => [record.user_id, record.bank_details]))
 
-  // Decrypt bank_details_snapshot for treasury view
-  return (data ?? []).map((claim) => ({
+  return claims.map((claim) => ({
     ...claim,
-    bank_details_snapshot: claim.bank_details_snapshot
-      ? decryptJSON<BankDetails>(claim.bank_details_snapshot)
-      : null,
+    bank_details_snapshot: decryptJSON<BankDetails>(
+      claim.bank_details_snapshot ?? bankDetailsByUser.get(claim.student_id)
+    ),
   }))
 }
 
@@ -57,20 +62,26 @@ export async function getAllReimbursements() {
 
   const { data } = await supabase
     .from('reimbursements')
-    .select(`*, entity:users!reimbursements_entity_id_fkey(full_name, email, bank_details)`)
+    .select('*, entity:users!reimbursements_entity_id_fkey(id, full_name, email)')
     .order('created_at', { ascending: false })
 
-  // Decrypt entity bank_details for treasury view
-  return (data ?? []).map((r) => ({
-    ...r,
-    entity: r.entity
-      ? {
-          ...r.entity,
-          bank_details: r.entity.bank_details
-            ? decryptJSON<BankDetails>(r.entity.bank_details)
-            : null,
-        }
-      : null,
+  const reimbursements = data ?? []
+  const entityIds = [...new Set(reimbursements.map((item) => item.entity_id))]
+  const { data: bankRecords } = entityIds.length
+    ? await supabase.from('user_bank_details').select('user_id, bank_details').in('user_id', entityIds)
+    : { data: [] }
+  const bankDetailsByUser = new Map((bankRecords ?? []).map((record) => [record.user_id, record.bank_details]))
+
+  return Promise.all(reimbursements.map(async (reimbursement) => {
+    const [{ data: signed }, entityBankDetails] = await Promise.all([
+      supabase.storage.from('reimbursement-proofs').createSignedUrl(reimbursement.proof_url, 60 * 60),
+      Promise.resolve(decryptJSON<BankDetails>(bankDetailsByUser.get(reimbursement.entity_id))),
+    ])
+    return {
+      ...reimbursement,
+      proof_url: signed?.signedUrl ?? '',
+      entity: reimbursement.entity ? { ...reimbursement.entity, bank_details: entityBankDetails } : null,
+    }
   }))
 }
 

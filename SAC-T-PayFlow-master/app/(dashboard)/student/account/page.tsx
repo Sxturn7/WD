@@ -12,14 +12,13 @@ export default async function AccountPage() {
   } = await supabase.auth.getUser()
   if (!user) redirect('/')
 
-  const { data: profile } = await supabase
-    .from('users')
-    .select('*')
-    .eq('id', user.id)
-    .single()
+  const [{ data: profile }, { data: bankRecord }] = await Promise.all([
+    supabase.from('users').select('id, email, full_name, roll_number, role').eq('id', user.id).single(),
+    supabase.from('user_bank_details').select('bank_details').eq('user_id', user.id).maybeSingle(),
+  ])
 
-  const bankDetails = profile?.bank_details
-    ? decryptJSON<BankDetails>(profile.bank_details)
+  const bankDetails = bankRecord?.bank_details
+    ? decryptJSON<BankDetails>(bankRecord.bank_details)
     : null
 
   return (

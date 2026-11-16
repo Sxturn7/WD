@@ -16,21 +16,20 @@ interface LoginFormProps {
   error?: string
 }
 
-type TurnstileApi = {
+type RecaptchaApi = {
   render: (container: HTMLElement, options: {
     sitekey: string
-    theme?: 'light' | 'dark' | 'auto'
+    theme?: 'light' | 'dark'
     callback: (token: string) => void
     'expired-callback'?: () => void
     'error-callback'?: () => void
-  }) => string
-  reset: (widgetId?: string) => void
-  remove: (widgetId: string) => void
+  }) => number
+  reset: (widgetId?: number) => void
 }
 
 declare global {
   interface Window {
-    turnstile?: TurnstileApi
+    grecaptcha?: RecaptchaApi
   }
 }
 
@@ -45,14 +44,14 @@ export function LoginForm({ error: initialError }: LoginFormProps = {}) {
   const [fullName, setFullName] = useState('')
   const [password, setPassword] = useState('')
   const [captchaToken, setCaptchaToken] = useState('')
-  const [turnstileReady, setTurnstileReady] = useState(false)
+  const [recaptchaReady, setRecaptchaReady] = useState(false)
   const captchaRef = useRef<HTMLDivElement>(null)
-  const widgetIdRef = useRef<string | null>(null)
-  const siteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY
+  const widgetIdRef = useRef<number | null>(null)
+  const siteKey = process.env.NEXT_PUBLIC_RECAPTCHA_SITE_KEY
 
   useEffect(() => {
-    if (!turnstileReady || !siteKey || !captchaRef.current || !window.turnstile) return
-    widgetIdRef.current = window.turnstile.render(captchaRef.current, {
+    if (!recaptchaReady || !siteKey || !captchaRef.current || !window.grecaptcha) return
+    widgetIdRef.current = window.grecaptcha.render(captchaRef.current, {
       sitekey: siteKey,
       theme: 'dark',
       callback: setCaptchaToken,
@@ -60,10 +59,10 @@ export function LoginForm({ error: initialError }: LoginFormProps = {}) {
       'error-callback': () => setCaptchaToken(''),
     })
     return () => {
-      if (widgetIdRef.current) window.turnstile?.remove(widgetIdRef.current)
+      if (widgetIdRef.current !== null) window.grecaptcha?.reset(widgetIdRef.current)
       widgetIdRef.current = null
     }
-  }, [turnstileReady, siteKey, tab])
+  }, [recaptchaReady, siteKey, tab])
 
   async function verifyCaptcha() {
     if (!captchaToken) {
@@ -80,13 +79,13 @@ export function LoginForm({ error: initialError }: LoginFormProps = {}) {
       const result = await verification.json()
       setCaptchaToken('')
       if (!verification.ok) {
-        if (widgetIdRef.current) window.turnstile?.reset(widgetIdRef.current)
+        if (widgetIdRef.current !== null) window.grecaptcha?.reset(widgetIdRef.current)
         toast.error(result.error ?? 'CAPTCHA verification failed.')
         return false
       }
       return true
     } catch {
-      if (widgetIdRef.current) window.turnstile?.reset(widgetIdRef.current)
+      if (widgetIdRef.current !== null) window.grecaptcha?.reset(widgetIdRef.current)
       setCaptchaToken('')
       toast.error('CAPTCHA verification is temporarily unavailable.')
       return false
@@ -105,14 +104,14 @@ export function LoginForm({ error: initialError }: LoginFormProps = {}) {
       if (!(await verifyCaptcha())) return
       const { error } = await supabase.auth.signInWithPassword({ email: email.trim().toLowerCase(), password })
       if (error) {
-        if (widgetIdRef.current) window.turnstile?.reset(widgetIdRef.current)
+        if (widgetIdRef.current !== null) window.grecaptcha?.reset(widgetIdRef.current)
         toast.error(error.code === 'invalid_credentials' ? 'Invalid email or password.' : 'Unable to sign in right now. Please try again.')
         return
       }
       router.push('/')
       router.refresh()
     } catch {
-      if (widgetIdRef.current) window.turnstile?.reset(widgetIdRef.current)
+      if (widgetIdRef.current !== null) window.grecaptcha?.reset(widgetIdRef.current)
       toast.error('Unable to sign in right now. Please try again.')
     } finally {
       setLoading(false)
@@ -166,11 +165,13 @@ export function LoginForm({ error: initialError }: LoginFormProps = {}) {
 
   return (
     <div className="min-h-screen flex bg-[#0d0d0f]">
-      <Script
-        src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"
-        strategy="afterInteractive"
-        onReady={() => setTurnstileReady(true)}
-      />
+      {siteKey && (
+        <Script
+          src="https://www.google.com/recaptcha/api.js?render=explicit"
+          strategy="afterInteractive"
+          onReady={() => setRecaptchaReady(true)}
+        />
+      )}
 
       {/* Left panel - branding */}
       <div className="hidden lg:flex lg:w-[52%] flex-col justify-between p-12 bg-zinc-950 border-r border-zinc-800/60 relative overflow-hidden">
@@ -332,7 +333,7 @@ export function LoginForm({ error: initialError }: LoginFormProps = {}) {
                   <div ref={captchaRef} aria-label="CAPTCHA verification" />
                 ) : (
                   <p role="alert" className="text-sm text-red-400 text-center">
-                    CAPTCHA is not configured. Ask an administrator to set the Turnstile site and secret keys.
+                    CAPTCHA is not configured. Ask an administrator to set the reCAPTCHA site and secret keys.
                   </p>
                 )}
               </div>

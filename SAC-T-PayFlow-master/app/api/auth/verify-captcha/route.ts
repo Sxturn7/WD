@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 
 export async function POST(request: Request) {
-  const secret = process.env.TURNSTILE_SECRET_KEY
+  const secret = process.env.RECAPTCHA_SECRET_KEY
   if (!secret) {
     return NextResponse.json({ error: 'CAPTCHA is not configured.' }, { status: 503 })
   }
@@ -16,13 +16,12 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Complete the CAPTCHA challenge.' }, { status: 400 })
   }
 
-  const formData = new FormData()
-  formData.set('secret', secret)
-  formData.set('response', token)
+  const formData = new URLSearchParams({ secret, response: token })
 
   try {
-    const response = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+    const response = await fetch('https://www.google.com/recaptcha/api/siteverify', {
       method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: formData,
       cache: 'no-store',
       signal: AbortSignal.timeout(5000),
